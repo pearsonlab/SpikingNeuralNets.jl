@@ -22,7 +22,7 @@ struct SNN{VT, ST, G} <: AbstractSNN{VT, ST, G}
     bias::Vector{VT}
     I::Vector{Bool}
     O::Vector{Bool}
-    m::Integer
+    m::ST
     S::Vector{Vector{ST}}
     V::Vector{Vector{VT}}
 
@@ -67,20 +67,17 @@ end
 
 Return the size of the network `snn`'s voltage memory.
 """
-memory(snn::SNN)::Real = snn.m
+function memory(snn::SNN{VT,ST})::ST where {VT<:Real, ST<:Integer}
+    return snn.m
+end
 
 """
     bias(snn::AbstractSNN)::Vector{<:Real}
 
 Return the bias for all neurons in the network `snn`.
 """
-bias(snn::SNN)::Vector{<:Real} = snn.bias
-
-"""
-    bias(snn::AbstractSNN, n::Integer)::Real
-
-Return the bias of neuron `n` in the network `snn`.
-"""
-bias(snn::SNN, n::Integer)::Real = snn.bias[n]
+function bias(snn::SNN{VT})::Vector{VT} where {VT<:Real}
+    return snn.bias
+end
 
 end

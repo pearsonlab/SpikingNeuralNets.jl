@@ -1,6 +1,6 @@
 module SNNTest
 using LightGraphs, SimpleWeightedGraphs, PyPlot
-using SpikingNeuralNets, SpikingNeuralNets.LIFSNN, SpikingNeuralNets.GraphUtils
+using SpikingNeuralNets, SpikingNeuralNets.LIFSNN, SpikingNeuralNets.GraphUtils, SpikingNeuralNets.SNNPlot
 
 const iterations = 1000
 const inputs = 1
@@ -18,7 +18,7 @@ const τref = 5.0
 
 # continuous input of 50mV
 function I(snn, n, s)
-    return -(1.00 + s[1])
+    return 1.00
 end
 
 function s(snn, n, s)
@@ -37,12 +37,13 @@ snn = LIF{Float64, Int}(graph; V=[[Vrest, Vrest, 1.0]], dt=dt,
 add_channel!(snn, "input", I, s, fill([0.001], 3))
 
 #input = [inputAct(i,t) for i in 1:inputs, t in 1:iterations]
-snn, V = step!(snn, iterations, transfer=(x -> thresh(x, Vθ)))
+snn, V = step!(snn, iterations, voltages; transfer=Base.Fix2(thresh, Vθ))
+V = reduce(hcat, V) # convert V from a Vector{Vector} to a Matrix
 S = spiketrain(snn, iterations)
 
 # Make a raster plot of the output
-display(rasterplot(S; timestep=dt, markercolor=:blue))
-display(rateplot(S; timestep=dt, average=false, window=750, dt=1, ylab="Firing Rate"))
-display(vplot(V; timestep=dt, ylab="Voltage"))
+display(rasterplot(S; xlim=[0, 1000], timestep=dt))
+display(rateplot(S; xlim=[0, 1000], timestep=dt, average=false, window=250, dt=1))
+display(voltageplot(V; xlim=[0, 1000], timestep=dt))
 
 end
