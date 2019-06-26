@@ -2,7 +2,7 @@
 module GraphUtils
 using LightGraphs, SimpleWeightedGraphs
 
-export CompleteBipartiteDiGraph, CompleteMultipartiteDiGraph, ComplexGraph
+export CompleteBipartiteDiGraph, CompleteMultipartiteDiGraph, ComplexGraph, add_inputs!
 
 """
     CompleteBipartiteDiGraph(n1, n2)
@@ -131,4 +131,37 @@ function ComplexGraph(metagraph::G, layers::AbstractVector{<:Integer}; selfloops
 
     return G(adjmat)
 end
+
+"""
+    add_inputs!(g::AbstractGraph{T}, vertices::AbstractVector{<:T}=vertices(g))
+
+For every vertex `vi` in `vertices` a new vertex `vinput` having a single edge `vinput->vi`.
+Return the indices of all new input vertices.
+"""
+function add_inputs!(g::AbstractGraph{T}, vertices::AbstractVector{<:T}=vertices(g)) where {T<:Integer}
+    vstart = size(g)+1
+    vstop = vstart + length(vertices)
+    add_vertices!(g, length(vertices))
+    for (vi, vinput) in zip(vertices, vstart:vstop)
+        add_edge!(g, vinput, vi)
+    end
+    return vstart:vstop
+end
+
+"""
+    add_inputs!(g::AbstractSimpleWeightedGraph{T,U}, vertices::AbstractVector{<:T}=vertices(g), w::AbstractVector{<:U}=ones(U, length(vertices)))
+
+For every vertex `vi` in `vertices` a new vertex `vinput` having a single edge `vinput->vi` with weight `weights[i]`.
+Return the indices of all new input vertices.
+"""
+function add_inputs!(g::AbstractSimpleWeightedGraph{T,U}, vertices::AbstractVector{<:T}=vertices(g), weights::AbstractVector{<:U}=ones(U, length(vertices))) where {T<:Integer, U<:Real}
+    vstart = nv(g)+1
+    vstop = vstart + length(vertices)
+    add_vertices!(g, length(vertices))
+    for (vi, vinput, w) in zip(vertices, vstart:vstop, weights)
+        add_edge!(g, vinput, vi, w)
+    end
+    return vstart:vstop
+end
+
 end

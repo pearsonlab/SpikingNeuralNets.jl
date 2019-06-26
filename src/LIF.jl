@@ -1,5 +1,5 @@
 module LIFSNN
-using LightGraphs, RecursiveArrayTools
+using LightGraphs
 using SpikingNeuralNets: voltage, spike, spiketime
 import SpikingNeuralNets: AbstractSNN, potential
 export LIF, memory, channels, haschannel, currentFn, varFn, vars, add_channel!, remove_channel!, I_syn, potential

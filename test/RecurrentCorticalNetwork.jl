@@ -3,7 +3,7 @@ using LightGraphs, SimpleWeightedGraphs, Distributions, Plots
 using SpikingNeuralNets, SpikingNeuralNets.LIFSNN, SpikingNeuralNets.GraphUtils, SpikingNeuralNets.SNNPlot
 
 # Set up the network
-const N = 100
+const N = 1000
 const fE = 0.8
 const fI = 1.0 - fE
 const nE = round(Int, fE*N)
@@ -40,13 +40,19 @@ add_edge!(metagraph, 4, 2, inhibitory)
 add_edge!(metagraph, 4, 3, inhibitory)
 add_edge!(metagraph, 4, 4, inhibitory)
 const graph = ComplexGraph(metagraph, [nA, nB, nNS, nI], selfloops=false) # neurons do not excite themselves
+add_inputs!(graph, vertices(graph), fill(neutral, nv(graph)))        # add external inputs for all neurons
 
 # Predicates for neuronal populations
 const aneurons = map(x -> x <= nA, vertices(graph))
 const bneurons = map(x -> x > nA && x <= nA+nB, vertices(graph))
-const nsneurons = map(x -> x > nA+nB && x <= nA+nB+nNS, vertices(graph))
+const nsneurons = map(x -> x > nA+nB && x <= nE, vertices(graph))
 const pyramidalneurons = @. aneurons | bneurons | nsneurons
-const interneurons = .!pyramidalneurons
+const interneurons = map(x -> x > nE && x <= nE+nI, vertices(graph))
+const inputneurons = map(x -> x > N, vertices(graph))
+const ainputneurons = map(x -> x > N && x <= N+nA+nB, vertices(graph))
+const binputneurons = map(x -> x > N && x <= N+nA+nB, vertices(graph))
+const nsinputneurons = map(x -> x > N && x <= N+nE, vertices(graph))
+const iinputneurons = map(x -> x > N+nE, vertices(graph))
 
 # Define input parameters
 const μ0 = 40 # Hz
@@ -91,23 +97,9 @@ const synt = 0 # round(Int, synl / dt)  # delay in timesteps
 function IextAMPA(lif::LIF, n::Integer, s::AbstractVector{<:Real})::Real
     return -gextAMPA(pyramidalneurons[n]) * (voltage(lif, n) - Ve) * sum(Wext .* s)
 end
-function sextAMPA(inputA, inputB)
-    ainds = ones(Int, size(inputA, 1))
-    binds = ones(Int, size(inputB, 1))
-
-    # return a function which pulls inputs to A and B populations from inputA and inputB
-    return function dsextAMPA(lif::LIF{VT}, n::Integer, s::AbstractVector{VT})::Vector{VT} where {VT <: Real}
-        input = rand(Poisson(Vext*lif.dt), 1)
-        if aneurons[n]
-            input .+= inputA[n, ainds[n]]
-            ainds[n] += one(Int)
-        elseif bneurons[n]
-            ind = n-nA
-            input .+= inputB[ind, binds[ind]]
-            binds[ind] += one(Int)
-        end
-        return @. -(s/τAMPA) + (input/lif.dt)
-    end
+return function sextAMPA(lif::LIF{VT}, n::Integer, s::AbstractVector{VT})::Vector{VT} where {VT <: Real}
+    input = spikes(lif, inputs(lif, n); t=synt)
+    return @. -(s/τAMPA) + (input/lif.dt)
 end
 
 function IrecAMPA(lif::LIF{VT}, n::Integer, s::AbstractVector{VT})::Real where {VT <: Real}
@@ -146,26 +138,6 @@ function sGABA(lif::LIF{VT}, n::Integer, s::AbstractVector{VT})::Vector{VT} wher
     return @. -(s/τGABA) + (input/lif.dt)
 end
 
-
-function inputs(c::Real, length::Integer)::Tuple{Matrix{Int}, Matrix{Int}}
-    μa = μ0 + ρa * c
-    μb = μ0 - ρb * c
-    sa = rand(Normal(μa, σ))  # input rates (Hz)
-    sb = rand(Normal(μb, σ))
-    Ainputs = Matrix{Int}(undef, nA, length)
-    Binputs = Matrix{Int}(undef, nB, length)
-    for t in 1:length
-        Ainputs[:, t] = rand(Poisson(dt*sa), nA)
-        Binputs[:, t] = rand(Poisson(max(dt*sb, 0.0)), nB)
-
-        # resample the rates every 50 ms.
-        if t % (50e-3 / dt) == 0
-            sa = rand(Normal(μa, σ))
-            sb = rand(Normal(μb, σ))
-        end
-    end
-    return Ainputs, Binputs
-end
 
 function singleneurontest(;pyramidal=true, x=x=0:-1e-13:-2e-11, iterations=10000)
     rates = Vector{Float64}(undef, length(x))
@@ -219,15 +191,41 @@ function synapsetest(;channel="AMPA", x=x=0:100, iterations=10000)
     #display(scatter(x, rates, xlab="Input Rate (Hz)", ylab="Output Firing Rate (Hz)"))
 end
 
+
+
+"""
+    geninput(c::Real, length::Integer, extStart=1, extStop=0)::Matrix{Int}
+
+Generate an `N`x`length` `Matrix` of background inputs given by `Poission(Vext)`,
+and additional external inputs to `aneurons` and `bneurons` given by
+`Poisson(Normal(μ0 + ρa*c))` and `Poisson(Normal(μ0 - ρb*c))` respectively.
+"""
+function geninput(;c::Real, length::Integer, extStart=1, extStop=length)::Matrix{Int}
+    μa = μ0 + ρa * c
+    μb = μ0 - ρb * c
+    sa = rand(Normal(μa, σ))  # input rates (Hz)
+    sb = rand(Normal(μb, σ))
+
+    # initialize with background noise at rate Vext
+    I = rand(Poisson(Vext*dt), N, length)
+
+    # add external inputs for iterations
+    for t in extStart:extStop
+        I[1:nA, t] += rand(Poisson(dt*sa), nA)
+        I[(nA+1):(nA+nB), t] += rand(Poisson(max(dt*sb, 0.0)), nB)
+
+        # resample the rates every 50 ms.
+        if t % (50e-3 / dt) == 0
+            sa = rand(Normal(μa, σ))
+            sb = rand(Normal(μb, σ))
+        end
+    end
+    return I
+end
+
 function run(;c::Real=0.0, iterations::Integer=10, window::Integer=100)
     GC.gc()
-    Ainputs, Binputs = inputs(c, iterations)
-
-    # add a rest period at the beginning and end of inputs
-    tStart = round(Int, 0.25 / dt)
-    tDelay = round(Int, 2.0 / dt)
-    Ainputs = [zeros(Int, nA, tStart) Ainputs zeros(Int, nA, tDelay)]
-    Binputs = [zeros(Int, nB, tStart) Binputs zeros(Int, nB, tDelay)]
+    I = geninput(;c=c, length=iterations)
 
     # create the LIF and add all of the channel types
     lif = LIF{Float64, Int}(graph; m=1, dt=dt, Vrest=fill(Vrest, nv(graph)),
@@ -238,14 +236,17 @@ function run(;c::Real=0.0, iterations::Integer=10, window::Integer=100)
                             τref=τref.(pyramidalneurons))
 
     # Add excitatory and inhibitory channels
-    add_channel!(lif, "extAMPA", IextAMPA, sextAMPA(Ainputs, Binputs), [rand(1)/1000 for n in neurons(lif)])
+    add_channel!(lif, "extAMPA", IextAMPA, sextAMPA, [rand(1)/1000 for n in neurons(lif)])
     add_channel!(lif, "recAMPA", IrecAMPA, srecAMPA, [rand(length(excitors(lif, n)))/1000 for n in neurons(lif)])
     add_channel!(lif, "NMDA", INMDA, varsNMDA, [rand(length(excitors(lif, n)), 2)/1000 for n in neurons(lif)])
     add_channel!(lif, "GABA", IGABA, sGABA, [rand(length(inhibitors(lif, n)))/1000 for n in neurons(lif)])
 
-    lif, V = step!(lif, iterations, voltages; transfer=Base.Fix2(thresh, Vθ))
+    lif, V = step!(lif, I, voltages; transfer=Base.Fix2(thresh, Vθ))
     V = reduce(hcat, V)
     S = spiketrain(lif, iterations)
+
+    #println(lif.S)
+    #println(S)
 
     display(plot(rasterplot(S[aneurons,:]; title="A Neurons", timestep=dt),
                  rateplot(S[aneurons,:]; timestep=dt, window=window),
