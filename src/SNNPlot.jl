@@ -50,7 +50,7 @@ function rates(S::AbstractMatrix{Bool}; window=0, dt=1, timestep=1, average=true
     t = range(window*timestep/2, length=bins, step=timestep*dt)
     tohz = 1 / (timestep*dt)
 
-    @inbounds for t in 0:bins-1
+    @inbounds Threads.@threads for t in 0:bins-1
         if average
             R[t+1, 1] = mean(S[:,(dt*t + 1):(dt*t + window + 1)]) * tohz
         else

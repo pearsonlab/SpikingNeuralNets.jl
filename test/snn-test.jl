@@ -1,5 +1,5 @@
 module SNNTest
-using LightGraphs, SimpleWeightedGraphs, PyPlot
+using LightGraphs, SimpleWeightedGraphs
 using SpikingNeuralNets, SpikingNeuralNets.LIFSNN, SpikingNeuralNets.GraphUtils, SpikingNeuralNets.SNNPlot
 
 const iterations = 1000

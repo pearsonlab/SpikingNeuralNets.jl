@@ -11,7 +11,7 @@ A data-type for LIF spiking neural networks.
 - `graph::G`: the graph structure of neurons (vertices) and weights (edges)
 - `I::Vector{Bool}`: specifies whether each neuron is an input neuron
 - `O::Vector{Bool}`: specifies whether each neuron is an output neuron
-- `S::Vector{Vector{ST}}`: a memory S[neuron][spike] of spike times
+- `S::Vector{Dict{ST, ST}}`: a memory S[neuron][time] of spike counts
 - `V::Vector{Vector{VT}}`: a length m voltage memory V[neuron][time],
     where V[1] is the least recent voltage and V[end] is the current recent voltage
 - `m::Integer`: the length of configuration memory
@@ -33,7 +33,7 @@ struct LIF{VT, ST, G} <: AbstractSNN{VT, ST, G}
     graph::G
     I::Vector{Bool}
     O::Vector{Bool}
-    S::Vector{Vector{ST}}
+    S::Vector{Dict{ST, ST}}
     V::Vector{Vector{VT}}
     m::ST
     dt::VT
@@ -57,8 +57,8 @@ struct LIF{VT, ST, G} <: AbstractSNN{VT, ST, G}
                      currentFns::Dict{String, Function}=Dict{String, Function}(),
                      varFns::Dict{String, Function}=Dict{String, Function}(),
                      vars::Dict{<:Tuple{String, <:Integer}, <:Array{<:VT}}=Dict{Tuple{String, Int}, Vector{VT}}(),
-                     S::Vector{<:Vector{<:ST}}=[Vector{ST}() for _ in vertices(graph)],
-                     V::Vector{<:Vector{<:VT}}=[rand(nv(graph)).*(Vθ.-Vrest).+Vrest]) where {VT<:Real, ST<:Integer, G<:AbstractGraph}
+                     S::Vector{<:Dict{<:ST, <:ST}}=[Dict{ST, ST}() for _ in vertices(graph)],
+                     V::Vector{<:Vector{<:VT}}=[rand(nv(graph)).*(Vθ.-Vrest).+Vrest]) where {VT<:Real, ST<:Integer, G<:AbstractGraph{ST}}
 
     Create a new LIF{VT,ST,G} with the given graph, parameters, and initial configuration.
     """
@@ -71,8 +71,8 @@ struct LIF{VT, ST, G} <: AbstractSNN{VT, ST, G}
                           currentFns::Dict{String, Function}=Dict{String, Function}(),
                           varFns::Dict{String, Function}=Dict{String, Function}(),
                           vars::Dict{<:Tuple{String, <:Integer}, <:Array{<:VT}}=Dict{Tuple{String, Int}, Vector{VT}}(),
-                          S::Vector{<:Vector{<:ST}}=[Vector{ST}() for _ in vertices(graph)],
-                          V::Vector{<:Vector{<:VT}}=[rand(nv(graph)).*(Vθ.-Vrest).+Vrest]) where {VT<:Real, ST<:Integer, G<:AbstractGraph}
+                          S::Vector{<:Dict{<:ST, <:ST}}=[Dict{ST, ST}() for _ in vertices(graph)],
+                          V::Vector{<:Vector{<:VT}}=[rand(nv(graph)).*(Vθ.-Vrest).+Vrest]) where {VT<:Real, ST<:Integer, G<:AbstractGraph{ST}}
         # Input neurons are those without incoming connections
         I = map(n -> length(inneighbors(graph, n)) == 0, vertices(graph))
         # Output neurons are those without outgoing connections
@@ -91,8 +91,8 @@ end
                currentFns::Dict{String, Function}=Dict{String, Function}(),
                varFns::Dict{String, Function}=Dict{String, Function}(),
                vars::Dict{<:Tuple{String, <:Integer}, <:Array{<:VT}}=Dict{Tuple{String, Int}, Vector{VT}}(),
-               S::Vector{<:Vector{<:ST}}=[Vector{ST}() for _ in vertices(graph)],
-               V::Vector{<:Vector{<:VT}}=[rand(nv(graph)).*(Vθ.-Vrest).+Vrest]) where {VT<:Real, ST<:Integer, G<:AbstractGraph}
+               S::Vector{<:Dict{<:ST, <:ST}}=[Dict{ST, ST}() for _ in vertices(graph)],
+               V::Vector{<:Vector{<:VT}}=[rand(nv(graph)).*(Vθ.-Vrest).+Vrest]) where {VT<:Real, ST<:Integer, G<:AbstractGraph{ST}}
 
 Create a new LIF{VT,ST,G} with the given graph and starting configuration.
 Shorthand for the more explicit call LIF{VT,ST,G}(graph...)
@@ -107,8 +107,8 @@ function LIF{VT,ST}(graph::G; m::ST=ST(1), dt::VT=VT(1), Vrest::Vector{<:VT}=zer
                     currentFns::Dict{String, Function}=Dict{String, Function}(),
                     varFns::Dict{String, Function}=Dict{String, Function}(),
                     vars::Dict{<:Tuple{String, <:Integer}, <:Array{<:VT}}=Dict{Tuple{String, Int}, Vector{VT}}(),
-                    S::Vector{<:Vector{<:ST}}=[Vector{ST}() for _ in vertices(graph)],
-                    V::Vector{<:Vector{<:VT}}=[rand(nv(graph)).*(Vθ.-Vrest).+Vrest]) where {VT<:Real, ST<:Integer, G<:AbstractGraph}
+                    S::Vector{<:Dict{<:ST, <:ST}}=[Dict{ST, ST}() for _ in vertices(graph)],
+                    V::Vector{<:Vector{<:VT}}=[rand(nv(graph)).*(Vθ.-Vrest).+Vrest]) where {VT<:Real, ST<:Integer, G<:AbstractGraph{ST}}
     return LIF{VT,ST,G}(graph; S=S, V=V, m=m, dt=dt, Vrest=Vrest, Vθ=Vθ, Vreset=Vreset,
                         τ=τ, R=R, τref=τref, currentFns=currentFns, varFns=varFns, vars=vars)
 end
@@ -190,10 +190,10 @@ function `currentFn`, the variable update function `varFn`, the initial variable
 """
 function add_channel!(lif::LIF{VT,ST,G}, name::String, currentFn::Function, varFn::Function,
                       vars::Vector{<:Array{<:VT}}=fill(zeros(VT, 0), size(lif)),
-                      neurons::AbstractVector{Bool}=.!lif.I)::LIF{VT,ST,G} where {VT<:Real,ST<:Integer,G<:AbstractGraph}
+                      neurons::AbstractVector{<:Integer}=findall(.!lif.I))::LIF{VT,ST,G} where {VT<:Real,ST<:Integer,G<:AbstractGraph}
     lif.currentFns[name] = currentFn
     lif.varFns[name] = varFn
-    for n in findall(neurons)
+    for n in neurons
         lif.vars[name, n] = vars[n]
     end
     return lif
@@ -226,7 +226,7 @@ function Isyn!(lif::LIF, n::Integer)::Real
     @inbounds for channel in channels(lif)
         if haskey(lif.vars, (channel, n))
             # calculate the gating variables
-            lif.vars[channel, n] += lif.varFns[channel](lif, n, lif.vars[channel, n]) .* lif.dt
+            lif.vars[channel, n] += lif.varFns[channel](lif, n, lif.vars[channel, n])
             # calculate the synaptic current
             I += lif.currentFns[channel](lif, n, lif.vars[channel, n])
         end
@@ -245,7 +245,7 @@ while calculating the synaptic input (see `Isyn!`).
 function potential(lif::LIF, n::Integer)::Real
     v = voltage(lif, n)
     I = Isyn!(lif, n)  # make sure to update the gating variables
-    if spike(lif, n) || spiketime(lif, n) * lif.dt < lif.τref[n]
+    if !iszero(spike(lif, n)) || spiketime(lif, n) * lif.dt < lif.τref[n]
         return lif.Vreset[n]
     else
         return v + lif.dt * (lif.Vrest[n] - v + (lif.R[n] * I)) / lif.τ[n]

@@ -1,5 +1,5 @@
 module SpikingNeuralNets
-using LightGraphs, SimpleWeightedGraphs, Statistics, SparseArrays
+using LightGraphs, SimpleWeightedGraphs, Statistics, SparseArrays, Lazy
 import Base.size, Base.length, Base.Broadcast.broadcastable
 
 export AbstractSNN,  # data-types
@@ -15,17 +15,16 @@ export AbstractSNN,  # data-types
     AbstractSNN{VT<:Real, ST<:Integer, G<:AbstractGraph}
 
 An abstract SNN type where VT is the voltage type,
-ST is the spike train type, and G is the graph type.
+ST is the spike train index type, and G is the graph type.
 
 An `AbstractSNN{VT, ST, G}` must have the following elements:
     - `graph::G`
     - `I::Vector{Bool}`
     - `O::Vector{Bool}`
-    - `S::Vector{Vector{ST}}`
+    - `S::Vector{Dict{ST, ST}}`
     - `V::Vector{Vector{VT}}`
 """
-abstract type AbstractSNN{VT<:Real, ST<:Integer, G<:AbstractGraph} end
-
+abstract type AbstractSNN{VT<:Real, ST<:Integer, G<:AbstractGraph{ST}} end
 Broadcast.broadcastable(snn::AbstractSNN) = Ref(snn)
 
 """
@@ -93,25 +92,22 @@ Get the current voltage of neuron `n` in the network `snn`.
 end
 
 """
-    spike(snn::AbstractSNN, n::Integer; t::Integer=0)::Bool
+    spike(snn::AbstractSNN{VT,ST}, n::Integer; t::Integer=zero(ST))::ST
 
 Calculate whether neuron `n` in the network `snn` was spiking `t` timesteps ago.
 By default, calculates whether `n` is currently spiking.
 """
-@views spike(snn::AbstractSNN, n::Integer; t::Integer=0)::Bool = (iszero(t) && !isempty(snn.S[n]) && snn.S[n][end] == 0) ||
-                                                                 !isempty(searchsorted(snn.S[n], t, rev=true))
+function spike(snn::AbstractSNN{VT,ST}, n::Integer; t::Integer=zero(ST))::ST where {VT<:Real, ST<:Integer}
+    return get(snn.S[n], ST(t), zero(ST))
+end
 
 """
-    spikes(snn::AbstractSNN, neurons::AbstractVector{<:Integer}; t::Integer=0)::BitArray{1}
+    spikes(snn::AbstractSNN, neurons::AbstractVector{<:Integer}=neurons(snn); t::Integer=0)::Vector{ST}
 
 Calculate whether `neurons` in the network `snn` are currently spiking.
 """
-function spikes(snn::AbstractSNN, neurons::AbstractVector{<:Integer}=neurons(snn); t::Integer=0)::BitArray{1}
-    S = BitArray(undef, length(neurons))
-    @inbounds for i in eachindex(neurons)
-        S[i] = spike(snn, neurons[i]; t=t)
-    end
-    return S
+function spikes(snn::AbstractSNN{VT,ST}, neurons::AbstractVector{<:Integer}=neurons(snn); t::Integer=0)::Vector{ST} where {VT<:Real, ST<:Integer}
+    return spike.(snn, neurons; t=t)
 end
 
 """
@@ -119,8 +115,8 @@ end
 
 Return the number of timesteps into the past of all spikes for neuron `n` in the network `snn`.
 """
-@views function spiketimes(snn::AbstractSNN{VT, ST}, n::Integer)::Vector{ST} where {VT<:Real, ST<:Integer}
-    return snn.S[n]
+@views function spiketimes(snn::AbstractSNN{VT, ST}, n::Integer)::Base.KeySet{ST, Dict{ST, ST}} where {VT<:Real, ST<:Integer}
+    return keys(snn.S[n])
 end
 
 """
@@ -129,7 +125,7 @@ end
 Return the number of timesteps into the past of all spikes for all neurons in the network `snn`.
 """
 function spiketimes(snn::AbstractSNN{VT,ST})::Vector{Vector{ST}} where {VT<:Real, ST<:Integer}
-    snn.S
+    return @. collect(spiketimes(snn, neurons(snn)))
 end
 
 """
@@ -142,7 +138,7 @@ Return the number of timesteps into the past of the most recent spike for neuron
     if isempty(snn.S[n])
         return typemax(ST)
     end
-    return snn.S[n][end]
+    return minimum(keys(snn.S[n]))
 end
 
 """
@@ -161,9 +157,9 @@ function spiketrain(snn::AbstractSNN, t::T)::SparseMatrixCSC{Bool, T} where T<:I
     S = trues(nspikes)
     s = 1
     @inbounds @views for n in eachindex(snn.S)
-        for spike in eachindex(snn.S[n])
+        for spiketime in keys(snn.S[n])
             I[s] = n
-            J[s] = t - snn.S[n][spike]
+            J[s] = t - spiketime
             s += 1
         end
     end
@@ -171,6 +167,20 @@ function spiketrain(snn::AbstractSNN, t::T)::SparseMatrixCSC{Bool, T} where T<:I
     i = J .>= 1
     return sparse(I[i], J[i], S[i], size(snn), t)
 end
+
+"""
+    inputs(snn::AbstractSNN)
+
+Return the indices of all input neurons in the network `snn`.
+"""
+inputs(snn::AbstractSNN) = findall(snn.I)
+
+"""
+    outputs(snn::AbstractSNN)
+
+Return the indices of all output neurons in the network `snn`.
+"""
+outputs(snn::AbstractSNN) = findall(snn.O)
 
 """
     input(snn::AbstractSNN{VT, ST})::Vector{ST} where {VT<:Real, ST<:Integer}
@@ -182,15 +192,6 @@ function input(snn::AbstractSNN{VT, ST})::Vector{ST} where {VT<:Real, ST<:Intege
 end
 
 """
-    inputs(snn::AbstractSNN{VT, ST})::Vector{ST} where {VT<:Real, ST<:Integer}
-
-Get the indices of all input neurons
-"""
-function inputs(snn::AbstractSNN{VT, ST})::Vector{ST} where {VT<:Real, ST<:Integer}
-    return findall(snn.I)
-end
-
-"""
     inputs(snn::AbstractSNN{VT, ST}, n::Integer)::Vector{ST} where {VT<:Real, ST<:Integer}
 
 Get the indices of all input neurons with projections to neuron `n`
@@ -198,15 +199,6 @@ Get the indices of all input neurons with projections to neuron `n`
 function inputs(snn::AbstractSNN{VT, ST}, n::Integer)::Vector{ST} where {VT<:Real, ST<:Integer}
     i = inneighbors(snn.graph, n)
     return i[snn.I[i]]
-end
-
-"""
-    outputs(snn::AbstractSNN{VT, ST})::Vector{ST} where {VT<:Real, ST<:Integer}
-
-Get the indices of all output neurons
-"""
-function outputs(snn::AbstractSNN{VT, ST})::Vector{ST} where {VT<:Real, ST<:Integer}
-    return findall(snn.O)
 end
 
 """
@@ -246,11 +238,15 @@ is_output(snn::AbstractSNN, n::Integer)::Bool = snn.O[n]
     excitors(snn::AbstractSNN, n::integer)::Vector{<:Integer}
 
 Return the indices of all neurons in the network `snn` with
-excitatory connections to neuron `n`.
+excitatory connections to neuron `n`. If `inputs=false` (default),
+exclude input neurons from the resulting vector.
 """
-function excitors(snn::AbstractSNN, n::Integer)::Vector{<:Integer}
+function excitors(snn::AbstractSNN, n::Integer; inputs=false)::Vector{<:Integer}
     i = inneighbors(snn.graph, n)
     w = view(weights(snn.graph), i, n)
+    if inputs
+        return i[w .> 0]
+    end
     return i[@. w > 0 & !snn.I[i]]
 end
 
@@ -258,12 +254,16 @@ end
     inhibitors(snn::AbstractSNN, n::integer)::Vector{<:Integer}
 
 Return the indices of all neurons in the network `snn` with
-inhibitory connections to neuron `n`.
+inhibitory connections to neuron `n`. If `inputs=false` (default),
+exclude input neurons from the resulting vector.
 """
-function inhibitors(snn::AbstractSNN, n::Integer)::Vector{<:Integer}
+function inhibitors(snn::AbstractSNN, n::Integer; inputs=false)::Vector{<:Integer}
     i = inneighbors(snn.graph, n)
     w = view(weights(snn.graph), i, n)
-    return i[@. w > 0 & !snn.I[i]]
+    if inputs
+        return i[w .< 0]
+    end
+    return i[@. w < 0 & !snn.I[i]]
 end
 
 """
@@ -326,6 +326,15 @@ Return `true` with probability `prob`, otherwise return `false`.
 fire(prob::Real)::Bool = rand() <= prob
 
 """
+    increment_keys(d::Dict{K,V})::Dict{K,V} where {K<:Real, V}
+
+Increment the listed keys in a `Dict` `d` by one(K).
+"""
+function increment_keys(d::Dict{K,V})::Dict{K,V} where {K<:Real, V}
+    return Dict(zip(keys(d) .+ one(K), values(d)))
+end
+
+"""
     cycle!(snn::AbstractSNN{VT, ST, G}, s::Vector{<:ST}, v::Vector{<:VT})::AbstractSNN{VT,ST,G} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
 
     Push `v` to the front of `snn`'s voltage memory, deleting any excess
@@ -345,10 +354,10 @@ function cycle!(snn::AbstractSNN{VT, ST, G}, s::AbstractVector{<:ST}, v::Abstrac
     end
 
     # increment spike times and add the new spikes
-    @inbounds for n in neurons(snn)
-        snn.S[n] .+= oneunit(ST)
+    @inbounds Threads.@threads for n in neurons(snn)
+        snn.S[n] = increment_keys(snn.S[n])
         if !iszero(s[n])
-            push!(snn.S[n], zero(ST))
+            snn.S[n][zero(ST)] = s[n]
         end
     end
     return snn
@@ -360,7 +369,8 @@ end
 Calculate `snn`'s new firing configuration as `f(p(pot(snn, input)))`
 and cycle `snn`'s memory accordingly.
 """
-function step!(snn::AbstractSNN{VT,ST,G}, input::AbstractVector{<:ST}=falses(sum(snn.I)); pot::Function=potential, transfer::Function=sigmoid, f=fire)::AbstractSNN{VT,ST,G} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
+function step!(snn::AbstractSNN{VT,ST,G}, input::AbstractVector{<:ST}=zeros(ST, sum(snn.I)); pot::Function=potential, transfer::Function=sigmoid, f=fire)::AbstractSNN{VT,ST,G} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
+    # Allocate vectors to store the new spikes/voltages
     s = Vector{ST}(undef, size(snn))
     v = Vector{VT}(undef, size(snn))
 
@@ -370,16 +380,21 @@ function step!(snn::AbstractSNN{VT,ST,G}, input::AbstractVector{<:ST}=falses(sum
     @inbounds s[I] = input
 
     # compute the new configuration
-    I = findall(.!snn.I)
-    @inbounds @. v[I] = pot(snn, I)
-    @inbounds @. s[I] = f(transfer(v[I]))
+    #I = findall(.!snn.I)
+    #@inbounds @. v[I] = pot(snn, I)
+    #@inbounds @. s[I] = f(transfer(v[I]))
+
+    @inbounds Threads.@threads for n in findall(.!snn.I)
+        v[n] = pot(snn, n)
+        s[n] = f(transfer(v[n]))
+    end
 
     # add the new configuration and remove excess configuration memory
     return cycle!(snn, s, v)
 end
 
 """
-    step!(snn::AbstractSNN{VT,ST,G}, input::AbstractMatrix{ST}; pot::Function=potential, transfer::Function=sigmoid, f=fire)::Tuple{AbstractSNN{VT,ST,G}, Matrix{VT}} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
+    step!(snn::AbstractSNN{VT,ST,G}, input::AbstractMatrix{<:ST}; pot::Function=potential, transfer::Function=sigmoid, f=fire)::Tuple{AbstractSNN{VT,ST,G}, Matrix{VT}} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
 
 For each column in `input[neuron, time]`, step! through `snn`. Return the updated
 SNN and the entire history of its voltages `V[neuron, time]` through each step.
@@ -387,8 +402,27 @@ SNN and the entire history of its voltages `V[neuron, time]` through each step.
 function step!(snn::AbstractSNN{VT,ST,G}, input::AbstractMatrix{<:ST}, stateFns::Vararg{Function, N}; pot::Function=potential, transfer::Function=sigmoid, f=fire)::Tuple{AbstractSNN{VT,ST,G}, Vararg{Vector{Any}, N}} where {VT<:Real, ST<:Integer, G<:AbstractGraph, N}
     T = size(input, 2)
     state = Tuple{Vararg{Vector{Any}, N}}(Vector{Any}(undef,T) for i in 1:length(stateFns))
-    @inbounds @views for t in 1:T
+    @inbounds for t in 1:T
         step!(snn, input[:,t], pot=pot, transfer=transfer, f=f)
+        for i in eachindex(state)
+            state[i][t] = stateFns[i](snn)
+        end
+    end
+
+    return snn, state...
+end
+
+"""
+    step!(snn::AbstractSNN{VT,ST,G}, input; pot::Function=potential, transfer::Function=sigmoid, f=fire)::Tuple{AbstractSNN{VT,ST,G}, Matrix{VT}} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
+
+For each value in an iterable `inputIter`, step! through `snn`. Return the updated
+SNN and the entire history of its voltages `V[neuron, time]` through each step.
+"""
+function step!(snn::AbstractSNN{VT,ST,G}, inputIter, stateFns::Vararg{Function, N}; pot::Function=potential, transfer::Function=sigmoid, f=fire)::Tuple{AbstractSNN{VT,ST,G}, Vararg{Vector{Any}, N}} where {VT<:Real, ST<:Integer, G<:AbstractGraph, N}
+    T = length(inputIter)
+    state = Tuple{Vararg{Vector{Any}, N}}(Vector{Any}(undef,T) for i in 1:length(stateFns))
+    @inbounds for (t, input) in zip(1:T, inputIter)
+        step!(snn, input, pot=pot, transfer=transfer, f=f)
         for i in eachindex(state)
             state[i][t] = stateFns[i](snn)
         end
@@ -404,7 +438,7 @@ For each `iteration` iterations, step! through `snn` with zero input. Return the
 SNN and the entire history of its voltages `V[neuron, time]` through each step.
 """
 function step!(snn::AbstractSNN{VT,ST,G}, iterations::Integer, stateFns::Vararg{Function, N}; pot::Function=potential, transfer::Function=sigmoid, f=fire)::Tuple{AbstractSNN{VT,ST,G}, Vararg{Vector{Any}, N}} where {VT<:Real, ST<:Integer, G<:AbstractGraph, N}
-    return step!(snn, zeros(ST, sum(snn.I), iterations), stateFns...; pot=pot, transfer=transfer, f=f)
+    return step!(snn, constantly(iterations, zeros(ST, sum(snn.I))), stateFns...; pot=pot, transfer=transfer, f=f)
 end
 
 include("SimpleSNN.jl")
