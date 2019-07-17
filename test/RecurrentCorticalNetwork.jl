@@ -152,7 +152,7 @@ function singleneurontest(;pyramidal=true, x=x=0:1e-13:10e-11, iterations=25000)
         I(lif, n, s) = x[i]
         s(lif, n, s) = zeros(size(s))
         add_channel!(lif, "input", I, s, [zeros(1)])
-        step!(lif, iterations; transfer=Base.Fix2(thresh, Vθ))
+        step!(lif, iterations; transfer=Base.Fix2(thresh, Vθ), threaded=false)
         rates[i] = mean(spiketrain(lif, iterations)) / dt
     end
     return plot(x, rates, xlab="Input Current (V)", ylab="Firing Rate (Hz)")
@@ -190,7 +190,7 @@ function synapsetest(;pyramidal=true, channel="AMPA", x=x=0:100, iterations=1000
                                 τ=τ.(pyramidal), R=Rm.(pyramidal),
                                 τref=τref.(pyramidal))
         add_channel!(lif, channel, I, s, fill(channel=="NMDA" ? zeros(1,2) : zeros(1), 2), [2])
-        lif, V, G = step!(lif, input, voltages, gate; transfer=Base.Fix2(thresh, Vθ))
+        lif, V, G = step!(lif, input, voltages, gate; transfer=Base.Fix2(thresh, Vθ), threaded=false)
         V = reduce(hcat, V)[2,:]
         G = reduce(vcat, G)
         gating[i,:] = mean(G, dims=1)
@@ -300,7 +300,7 @@ function run(;c::Real=0.0, iterations::Integer=10, window::Integer=100, extStart
     add_channel!(lif, "NMDA", INMDA, varsNMDA, [zeros(length(excitors(lif, n)), 2) for n in neurons(lif)])
     add_channel!(lif, "GABA", IGABA, sGABA, [zeros(length(inhibitors(lif, n))) for n in neurons(lif)])
 
-    lif, V = step!(lif, I, voltages; transfer=Base.Fix2(thresh, Vθ))
+    lif, V = step!(lif, I, voltages; transfer=Base.Fix2(thresh, Vθ), threaded=true)
     V = reduce(hcat, V)
     S = spiketrain(lif, iterations)
 

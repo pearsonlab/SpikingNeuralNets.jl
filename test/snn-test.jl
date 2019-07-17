@@ -37,7 +37,7 @@ snn = LIF{Float64, Int}(graph; V=[[Vrest, Vrest, 1.0]], dt=dt,
 add_channel!(snn, "input", I, s, fill([0.001], 3))
 
 #input = [inputAct(i,t) for i in 1:inputs, t in 1:iterations]
-snn, V = step!(snn, iterations, voltages; transfer=Base.Fix2(thresh, Vθ))
+snn, V = step!(snn, iterations, voltages; transfer=Base.Fix2(thresh, Vθ), threaded=false)
 V = reduce(hcat, V) # convert V from a Vector{Vector} to a Matrix
 S = spiketrain(snn, iterations)
 

@@ -342,7 +342,7 @@ end
     Add current spike times (zeros) to `snn`'s spike train memory if `s[n] = true`,
     and increment previous spike times by 1.
 """
-function cycle!(snn::AbstractSNN{VT, ST, G}, s::AbstractVector{<:ST}, v::AbstractVector{<:VT})::AbstractSNN{VT,ST,G} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
+function cycle!(snn::AbstractSNN{VT, ST, G}, s::AbstractVector{<:ST}, v::AbstractVector{<:VT}; threaded=false)::AbstractSNN{VT,ST,G} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
     # add the new voltages
     if memory(snn) == 1
         @inbounds snn.V[1] = v
@@ -354,22 +354,32 @@ function cycle!(snn::AbstractSNN{VT, ST, G}, s::AbstractVector{<:ST}, v::Abstrac
     end
 
     # increment spike times and add the new spikes
-    @inbounds Threads.@threads for n in neurons(snn)
-        snn.S[n] = increment_keys(snn.S[n])
-        if !iszero(s[n])
-            snn.S[n][zero(ST)] = s[n]
+    if threaded
+        @inbounds Threads.@threads for n in neurons(snn)
+            snn.S[n] = increment_keys(snn.S[n])
+            if !iszero(s[n])
+                snn.S[n][zero(ST)] = s[n]
+            end
+        end
+    else
+        @inbounds for n in neurons(snn)
+            snn.S[n] = increment_keys(snn.S[n])
+            if !iszero(s[n])
+                snn.S[n][zero(ST)] = s[n]
+            end
         end
     end
     return snn
 end
 
 """
-    step!(snn::AbstractSNN{VT,ST,G}, input::AbstractVector{<:ST}=zeros(ST, sum(snn.I)); pot::Function=potential, transfer::Function=sigmoid, f=fire)::AbstractSNN{VT,ST,G} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
+    step!(snn::AbstractSNN{VT,ST,G}, input::AbstractVector{<:ST}=zeros(ST, sum(snn.I));
+          pot::Function=potential, transfer::Function=sigmoid, f=fire, threaded=false)::AbstractSNN{VT,ST,G} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
 
 Calculate `snn`'s new firing configuration as `f(p(pot(snn, input)))`
 and cycle `snn`'s memory accordingly.
 """
-function step!(snn::AbstractSNN{VT,ST,G}, input::AbstractVector{<:ST}=zeros(ST, sum(snn.I)); pot::Function=potential, transfer::Function=sigmoid, f=fire)::AbstractSNN{VT,ST,G} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
+function step!(snn::AbstractSNN{VT,ST,G}, input::AbstractVector{<:ST}=zeros(ST, sum(snn.I)); pot::Function=potential, transfer::Function=sigmoid, f=fire, threaded=false)::AbstractSNN{VT,ST,G} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
     # Allocate vectors to store the new spikes/voltages
     s = Vector{ST}(undef, size(snn))
     v = Vector{VT}(undef, size(snn))
@@ -380,30 +390,33 @@ function step!(snn::AbstractSNN{VT,ST,G}, input::AbstractVector{<:ST}=zeros(ST, 
     @inbounds s[I] = input
 
     # compute the new configuration
-    #I = findall(.!snn.I)
-    #@inbounds @. v[I] = pot(snn, I)
-    #@inbounds @. s[I] = f(transfer(v[I]))
-
-    @inbounds Threads.@threads for n in findall(.!snn.I)
-        v[n] = pot(snn, n)
-        s[n] = f(transfer(v[n]))
+    if threaded
+        @inbounds Threads.@threads for n in findall(.!snn.I)
+            v[n] = pot(snn, n)
+            s[n] = f(transfer(v[n]))
+        end
+    else
+        I = findall(.!snn.I)
+        @inbounds @. v[I] = pot(snn, I)
+        @inbounds @. s[I] = f(transfer(v[I]))
     end
 
     # add the new configuration and remove excess configuration memory
-    return cycle!(snn, s, v)
+    return cycle!(snn, s, v; threaded=threaded)
 end
 
 """
-    step!(snn::AbstractSNN{VT,ST,G}, input::AbstractMatrix{<:ST}; pot::Function=potential, transfer::Function=sigmoid, f=fire)::Tuple{AbstractSNN{VT,ST,G}, Matrix{VT}} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
+    step!(snn::AbstractSNN{VT,ST,G}, input::AbstractMatrix{<:ST}, stateFns::Vararg{Function, N};
+          pot::Function=potential, transfer::Function=sigmoid, f=fire, threaded=false)::Tuple{AbstractSNN{VT,ST,G}, Vararg{Vector{Any}, N}} where {VT<:Real, ST<:Integer, G<:AbstractGraph, N}
 
 For each column in `input[neuron, time]`, step! through `snn`. Return the updated
 SNN and the entire history of its voltages `V[neuron, time]` through each step.
 """
-function step!(snn::AbstractSNN{VT,ST,G}, input::AbstractMatrix{<:ST}, stateFns::Vararg{Function, N}; pot::Function=potential, transfer::Function=sigmoid, f=fire)::Tuple{AbstractSNN{VT,ST,G}, Vararg{Vector{Any}, N}} where {VT<:Real, ST<:Integer, G<:AbstractGraph, N}
+function step!(snn::AbstractSNN{VT,ST,G}, input::AbstractMatrix{<:ST}, stateFns::Vararg{Function, N}; pot::Function=potential, transfer::Function=sigmoid, f=fire, threaded=false)::Tuple{AbstractSNN{VT,ST,G}, Vararg{Vector{Any}, N}} where {VT<:Real, ST<:Integer, G<:AbstractGraph, N}
     T = size(input, 2)
     state = Tuple{Vararg{Vector{Any}, N}}(Vector{Any}(undef,T) for i in 1:length(stateFns))
     @inbounds for t in 1:T
-        step!(snn, input[:,t], pot=pot, transfer=transfer, f=f)
+        step!(snn, input[:,t], pot=pot, transfer=transfer, f=f, threaded=threaded)
         for i in eachindex(state)
             state[i][t] = stateFns[i](snn)
         end
@@ -413,16 +426,17 @@ function step!(snn::AbstractSNN{VT,ST,G}, input::AbstractMatrix{<:ST}, stateFns:
 end
 
 """
-    step!(snn::AbstractSNN{VT,ST,G}, input; pot::Function=potential, transfer::Function=sigmoid, f=fire)::Tuple{AbstractSNN{VT,ST,G}, Matrix{VT}} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
+    step!(snn::AbstractSNN{VT,ST,G}, inputIter, stateFns::Vararg{Function, N};
+          pot::Function=potential, transfer::Function=sigmoid, f=fire, threaded=false)::Tuple{AbstractSNN{VT,ST,G}, Vararg{Vector{Any}, N}} where {VT<:Real, ST<:Integer, G<:AbstractGraph, N}
 
 For each value in an iterable `inputIter`, step! through `snn`. Return the updated
 SNN and the entire history of its voltages `V[neuron, time]` through each step.
 """
-function step!(snn::AbstractSNN{VT,ST,G}, inputIter, stateFns::Vararg{Function, N}; pot::Function=potential, transfer::Function=sigmoid, f=fire)::Tuple{AbstractSNN{VT,ST,G}, Vararg{Vector{Any}, N}} where {VT<:Real, ST<:Integer, G<:AbstractGraph, N}
+function step!(snn::AbstractSNN{VT,ST,G}, inputIter, stateFns::Vararg{Function, N}; pot::Function=potential, transfer::Function=sigmoid, f=fire, threaded=false)::Tuple{AbstractSNN{VT,ST,G}, Vararg{Vector{Any}, N}} where {VT<:Real, ST<:Integer, G<:AbstractGraph, N}
     T = length(inputIter)
     state = Tuple{Vararg{Vector{Any}, N}}(Vector{Any}(undef,T) for i in 1:length(stateFns))
     @inbounds for (t, input) in zip(1:T, inputIter)
-        step!(snn, input, pot=pot, transfer=transfer, f=f)
+        step!(snn, input, pot=pot, transfer=transfer, f=f, threaded=threaded)
         for i in eachindex(state)
             state[i][t] = stateFns[i](snn)
         end
@@ -432,13 +446,15 @@ function step!(snn::AbstractSNN{VT,ST,G}, inputIter, stateFns::Vararg{Function, 
 end
 
 """
-    step!(snn::AbstractSNN{VT,ST,G}, iterations::Integer; pot::Function=potential, transfer::Function=sigmoid, f=fire)::Tuple{AbstractSNN{VT,ST,G}, Matrix{VT}} where {VT<:Real, ST<:Integer, G<:AbstractGraph}
+    step!(snn::AbstractSNN{VT,ST,G}, iterations::Integer, stateFns::Vararg{Function, N};
+          pot::Function=potential, transfer::Function=sigmoid, f=fire, threaded=false)::Tuple{AbstractSNN{VT,ST,G}, Vararg{Vector{Any}, N}} where {VT<:Real, ST<:Integer, G<:AbstractGraph, N}
 
 For each `iteration` iterations, step! through `snn` with zero input. Return the updated
 SNN and the entire history of its voltages `V[neuron, time]` through each step.
 """
-function step!(snn::AbstractSNN{VT,ST,G}, iterations::Integer, stateFns::Vararg{Function, N}; pot::Function=potential, transfer::Function=sigmoid, f=fire)::Tuple{AbstractSNN{VT,ST,G}, Vararg{Vector{Any}, N}} where {VT<:Real, ST<:Integer, G<:AbstractGraph, N}
-    return step!(snn, constantly(iterations, zeros(ST, sum(snn.I))), stateFns...; pot=pot, transfer=transfer, f=f)
+function step!(snn::AbstractSNN{VT,ST,G}, iterations::Integer, stateFns::Vararg{Function, N};
+               pot::Function=potential, transfer::Function=sigmoid, f=fire, threaded=false)::Tuple{AbstractSNN{VT,ST,G}, Vararg{Vector{Any}, N}} where {VT<:Real, ST<:Integer, G<:AbstractGraph, N}
+    return step!(snn, constantly(iterations, zeros(ST, sum(snn.I))), stateFns...; pot=pot, transfer=transfer, f=f, threaded=threaded)
 end
 
 include("SimpleSNN.jl")
