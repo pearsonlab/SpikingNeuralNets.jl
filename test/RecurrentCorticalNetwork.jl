@@ -84,7 +84,7 @@ gNMDA(pyramidal::Bool)::Real = pyramidal ? 0.165e-9 : 0.13e-9
 gGABA(pyramidal::Bool)::Real = pyramidal ? 1.3e-9 : 1.0e-9
 # synaptic decay times
 const τAMPA = 2e-3/dt
-const α = 500.0*dt # 500 Hz
+const α = 500.0*dt
 const τNMDAd = 100e-3/dt # decay
 const τNMDAr = 2e-3/dt # rise
 const τGABA = 5e-3/dt
@@ -95,7 +95,7 @@ const synt = 0 # round(Int, synl / dt)  # delay in timesteps
 
 # synaptic current and gating functions
 function IextAMPA(lif::LIF, n::Integer, s::AbstractVector{<:Real})::Real
-    return -gextAMPA(pyramidalneurons[n]) * (voltage(lif, n) - Ve) * sum(Wext .* s)
+    return -gextAMPA(pyramidalneurons[n]) * (voltage(lif, n) - Ve) * sum(s)
 end
 return function sextAMPA(lif::LIF{VT}, n::Integer, s::AbstractVector{VT})::Vector{VT} where {VT <: Real}
     input = spikes(lif, inputs(lif, n); t=synt)

@@ -1,6 +1,7 @@
 module ReducedTest
-using DifferentialEquations, Distributions, Plots
+using DifferentialEquations, Plots
 using SpikingNeuralNets: thresh
+using SpikingNeuralNets.SNNPlot: smooth
 
 # Fixed Parameters
 const Jext = 0.2243e-3                # weights
@@ -13,13 +14,12 @@ const τs = 100e-3           # time constants (s)
 const τAMPA = 2e-3
 const θ = 15.0              # firing rate threshold (Hz)
 const γ = 0.641
-const Iext = 0.2346         # external input current
-const η = Normal()
-const σnoise = 0.007
+const Iext = 0.35  #0.2346         # external input current
+const σnoise = 0.007 # 0.007
 
-# input calculations
-xA(Sa, Sb, Ia, Inoise, t) = JNaa*Sa - JNab*Sb + Iext + Ia*thresh(t, 0.0) + Inoise
-xB(Sa, Sb, Ib, Inoise, t) = JNbb*Sb - JNba*Sa + Iext + Ib*thresh(t, 0.0) + Inoise
+# input calculations- input = 0 when t<0
+xA(Sa, Sb, I, Inoise, t) = JNaa*Sa - JNab*Sb + Iext + I*thresh(t, 0.0) + Inoise
+xB(Sa, Sb, I, Inoise, t) = JNbb*Sb - JNba*Sa + Iext + I*thresh(t, 0.0) + Inoise
 
 # Effective transfer function
 a(J) = 239400J + 270
@@ -31,39 +31,57 @@ function H(J1, J2, x1, x2)
     return v / (1 - exp(-d(J1) * v))
 end
 
+# 2-variable reduced model
 function model(Ia, Ib)
-    return function(du, u, p, t)
-        Sa, Inoisea, Sb, Inoiseb = u
+    return function(du, u, p, t, W)
+        Sa, Sb = u
+        Inoisea, Inoiseb = W
         xa = xA(Sa, Sb, Ia, Inoisea, t)
         xb = xB(Sa, Sb, Ib, Inoiseb, t)
-        #println("Sa: $Sa, Sb: $Sb, Inoise: $Inoise")
 
         du[1] = -(Sa/τs) + (1 - Sa) * γ * H(JAaa, JAab, xa, xb)
-        du[2] = (rand(η)*σnoise*sqrt(τAMPA) - Inoisea) / τAMPA
-        du[3] = -(Sb/τs) + (1 - Sb) * γ * H(JAbb, JAba, xb, xa)
-        du[4] = (rand(η)*σnoise*sqrt(τAMPA) - Inoiseb) / τAMPA
-
-        #println("dSa: $(du[1]), dSb: $(du[2]), dInoise: $(du[3])")
+        du[2] = -(Sb/τs) + (1 - Sb) * γ * H(JAbb, JAba, xb, xa)
     end
 end
 
-function run(;c=100, μ0=30.0, sA0=0.0, sB0=0.0, Inoisea0=0.0, Inoiseb0=0.0, tstart=-0.5, tstop=1.0, step=0.01e-3)
+"""
+    run(;c=100, μ0=30.0, S0=[0.0, 0.0], Inoise0=[0.0, 0.0], tstart=-0.5, tstop=1.0, dt=0.1e-3)
+
+Run a reduced 2-variable model of LIP cortical neurons during a random dot motion
+task with coherence `c`. `μ0` is the firing rate (in Hz) of input neurons from MT,
+`S0` are the initial average NMDA gating variables for the reduced model,
+`Inoise0` are the initial noise currents, `tstart` is the  starting time of the
+simulation (negative times having no stimulus), `tstop` is the stopping time of
+the simulation, and `dt` is the timestep of the simulation.
+"""
+function run(;c=100, μ0=30.0, S0=[0.0, 0.0], Inoise0=[0.0, 0.0], tstart=-0.5, tstop=1.0, dt=0.1e-3)
     Ia = Jext*μ0*(1 + c/100.0)
     Ib = Jext*μ0*(1 - c/100.0)
     println("Ia: $Ia, Ib: $Ib")
 
-    prob = ODEProblem(model(Ia, Ib), [sA0, sB0, Inoisea0, Inoiseb0], (tstart, tstop))
+    # noise process: τAMPA dI(t)/dt = -I(t) + W(t)*σnoise*√τAMPA
+    W = OrnsteinUhlenbeckProcess(τAMPA, 0.0, σnoise*√τAMPA, tstart, Inoise0)
+    prob = RODEProblem(model(Ia, Ib), S0, (tstart, tstop), noise=W)
     println(prob)
-    sol = solve(prob, reltol=1e-15, absstol=1e-15, saveat=step, maxiters=1e10)
-    display(plot(sol))
+    sol = solve(prob, reltol=1e-15, absstol=1e-15, dt=dt, maxiters=1e10)
 
-    Sa, Inoisea, Sb, Inoiseb = eachrow(reduce(hcat, sol.u))
+    # Reconstruct the firing rates
+    Sa, Sb = eachrow(reduce(hcat, sol.u))
+    Inoisea, Inoiseb = eachrow(reduce(hcat, sol.W.u[1:length(Sa)]))
     xa = xA.(Sa, Sb, Ia, Inoisea, sol.t)
     xb = xB.(Sa, Sb, Ib, Inoiseb, sol.t)
     ra = H.(JAaa, JAab, xa, xb)
     rb = H.(JAbb, JAba, xb, xa)
+    #ras, ta = smooth(H.(JAaa, JAab, xa, xb); window=round(Int, 50e-3/dt), dt=round(Int, 5e-3/dt), timestep=dt, tohz=1.0)
+    #rbs, tb = smooth(H.(JAbb, JAba, xb, xa); window=round(Int, 50e-3/dt), dt=round(Int, 5e-3/dt), timestep=dt, tohz=1.0)
+
+    display(plot(plot(sol, label=["sA", "sB"]),
+                 plot(sol.t, [xa, xb], label=["xA", "xB"]),
+                 plot(sol.t, [ra, rb], label=["rA", "rB"]),
+                 layout=(3, 1)))
 
     return (sol.t, Sa, Sb, xa, xb, ra, rb, Inoisea, Inoiseb)
+
 end
 
 end
