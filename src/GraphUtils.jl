@@ -1,8 +1,8 @@
 # Requires LightGraphs and SimpleWeightedGraphs
 module GraphUtils
 using LightGraphs, SimpleWeightedGraphs
-
-export CompleteBipartiteDiGraph, CompleteMultipartiteDiGraph, ComplexGraph, add_inputs!
+using Base.Cartesian
+export CompleteBipartiteDiGraph, CompleteMultipartiteDiGraph, ComplexGraph, mesh_graph, grid_layout, add_inputs!
 
 """
     CompleteBipartiteDiGraph(n1, n2)
@@ -133,13 +133,174 @@ function ComplexGraph(metagraph::G, layers::AbstractVector{<:Integer}; selfloops
 end
 
 """
+    _neighbors(ind::CartesianIndex{N}; forward::Vector{<:Integer}=ones(Int, N), backward::Vector{<:Integer}=ones(Int, N),
+               self::Bool=true, diagonals::Bool=true, horizontals::Bool=true)::Vector{CartesianIndex{N}} where N
+
+For any `N`-dimensional index `ind`, generate a vector of all indices neighboring
+`ind`, including all indices within `backward` indices behind ind to `forward` in
+front of ind. `ind` is included in the return value iff `self` is true. Indices
+diagonal to `ind` are included iff `diagonals` is true, and indices horizontal to
+`ind` are included iff `horizontals` is true.
+"""
+function _neighbors(ind::CartesianIndex{N}; forward::Vector{<:Integer}=ones(Int, N), backward::Vector{<:Integer}=ones(Int, N), self::Bool=true, diagonals::Bool=true, horizontals::Bool=true)::Vector{CartesianIndex{N}} where N
+    if length(forward) != N || length(backward) != N
+        error("Forward and backward strides must have length $N.")
+    end
+
+    return [ind+i for i in -CartesianIndex(backward...):CartesianIndex(forward...) if (self && i == zero(i)) || (horizontals && any(iszero.(Tuple(i)))&& any(.!iszero.(Tuple(i)))) || (diagonals && !any(iszero.(Tuple(i))))]
+end
+
+"""
+    _mesh(G::Type{<:AbstractGraph}, dims::Tuple{Vararg{<:Integer, N}}, args...; kwargs...) where N
+
+Generate an `N` dimensional mesh graph of type `G` with size `dims` in each dimension.
+Optional arguments are passed to LightGraphs.add_edge!, and keyword arguments are
+passed to `SpikingNeuralNets.GraphUtils_neighbors`.
+"""
+function _mesh(G::Type{<:AbstractGraph}, dims::Tuple{Vararg{<:Integer, N}}, args...; kwargs...) where N
+    if iszero(N)
+        return G()
+    end
+
+    g = G(reduce(*, dims))
+    verts = reshape(vertices(g), dims)    # store the linear index of each vertex
+    inds = CartesianIndices(verts)
+    Ifirst, Ilast = Tuple(first(inds)), Tuple(last(inds))
+    for u in inds
+        for v in _neighbors(u; self=false, kwargs...)
+            if all(Tuple(v) .>= Ifirst) && all(Tuple(v) .<= Ilast)
+                add_edge!(g, verts[u], verts[v], args...)
+            end
+        end
+    end
+
+    return g
+end
+
+"""
+    mesh_graph(dims::Tuple{Vararg{<:Integer, N}}; directed=true, weight=nothing, kwargs...) where N
+
+Generate an `N`-dimensional mesh graph of size `dims` in each dimension.
+Keyword arguments:
+  `directed`: if true (default), return a directed graph. Else return an undirected graph.
+  `weight`: if nothing (default), return an `AbstractSimpleGraph`. Else return an
+            `AbstractSimpleWeightedGraph` where each edge has weight `weight`.
+  `backward`: the number of vertices (in each dimension) behind each vertex `v`
+              with incoming edges from `v`. By default, `ones(Int, N)`.
+  `forward`: the number of vertices (in each dimension) in front of each vertex
+             `v` with incoming edges from `v`. By default, `ones(Int, N)`.
+  `horizontals`: if true (default), vertices are connected horizontally (where vertices
+                 are aligned on any single dimension). Else these edges are omitted.
+  `diagonals`: if true (default), vertices are connected diagonally, where vertices are not
+               aligned on any dimension. Else these edges are omitted.
+  `self`: if true (default), edges `(v, v)` are included for all vertices `v`.
+          Else these edges are omitted.
+"""
+function mesh_graph(dims::Tuple{Vararg{<:Integer, N}}; directed=true, weight=nothing, kwargs...) where N
+    if isnothing(weight)
+        if directed
+            return _mesh(SimpleDiGraph, dims; kwargs...)
+        else
+            return _mesh(SimpleGraph, dims; kwargs...)
+        end
+    else
+        if directed
+            return _mesh(SimpleWeightedDiGraph, dims, weight; kwargs...)
+        else
+            return _mesh(SimpleWeightedGraph, dims, weight; kwargs...)
+        end
+    end
+end
+
+"""
+    mesh_graph(dims::Vararg{<:Integer, N}; directed=true, weight=nothing, kwargs...) where N
+
+Generate an `N`-dimensional mesh graph of size `dims` in each dimension.
+Keyword arguments:
+  `directed`: if true (default), return a directed graph. Else return an undirected graph.
+  `weight`: if nothing (default), return an `AbstractSimpleGraph`. Else return an
+            `AbstractSimpleWeightedGraph` where each edge has weight `weight`.
+  `backward`: the number of vertices (in each dimension) behind each vertex `v`
+              with incoming edges from `v`. By default, `ones(Int, N)`.
+  `forward`: the number of vertices (in each dimension) in front of each vertex
+             `v` with incoming edges from `v`. By default, `ones(Int, N)`.
+  `horizontals`: if true (default), vertices are connected horizontally (where vertices
+                 are aligned on any single dimension). Else these edges are omitted.
+  `diagonals`: if true (default), vertices are connected diagonally, where vertices are not
+               aligned on any dimension. Else these edges are omitted.
+  `self`: if true (default), edges `(v, v)` are included for all vertices `v`.
+          Else these edges are omitted.
+"""
+function mesh_graph(dims::Vararg{<:Integer, N}; kwargs...) where N
+    return mesh_graph(dims; kwargs...)
+end
+
+"""
+    grid_layout(g::AbstractGraph; reverse_x::Bool=false, reverse_y::Bool=false, columnwise=false)
+
+Return a tuple of x locations and y locations for a graph, laying out
+each vertex in a single row (if `columnwise == false`, default) or column
+(if `columnwise == true`). The row/column order can be reversed using the boolean
+flags `reverse_x` and `reverse_y`, respectively.
+"""
+function grid_layout(g::AbstractGraph; reverse_x::Bool=false, reverse_y::Bool=false, columnwise=false)
+    if columnwise
+        locs_x, locs_y = zeros(nv(g)), vertices(g)
+    else
+        locs_x, locs_y = vertices(g), zeros(nv(g))
+    end
+
+    if reverse_x
+        reverse!(locs_x)
+    end
+    if reverse_y
+        reverse!(locs_y)
+    end
+    return locs_x, locs_y
+end
+
+"""
+    grid_layout(g::AbstractGraph, dims::Tuple{<:Integer, <:Integer};
+                reverse_x::Bool=false, reverse_y::Bool=false, columnwise::Bool=true)
+
+Return a tuple of x locations and y locations for all vertices in a graph, laying out
+each vertex an a grid of size `dims` in row-major order (if `columnwise == false`)
+or column-major order (if `columnwise == true`, default). The row/column order can
+be reversed using the boolean flags `reverse_x` and `reverse_y`, respectively.
+"""
+function grid_layout(g::AbstractGraph, dims::Tuple{<:Integer, <:Integer};
+                     reverse_x::Bool=false, reverse_y::Bool=false, columnwise::Bool=true)
+    if reduce(*, dims) != nv(g)
+        error("dims ($(dims)) does not match the number of vertices in g ($(nv(g))).")
+    end
+
+    inds = vec([(Float64(x), Float64(y)) for x in Base.OneTo(dims[1]), y in Base.OneTo(dims[2])])
+    if columnwise
+        locs_x = getindex.(inds, 2)
+        locs_y = getindex.(inds, 1)
+    else
+        locs_x = getindex.(inds, 1)
+        locs_y = getindex.(inds, 2)
+    end
+
+    if reverse_x
+        reverse!(locs_x)
+    end
+    if reverse_y
+        reverse!(locs_y)
+    end
+
+    return locs_x, locs_y
+end
+
+"""
     add_inputs!(g::AbstractGraph{T}, vertices::AbstractVector{<:T}=vertices(g))
 
 For every vertex `vi` in `vertices` a new vertex `vinput` having a single edge `vinput->vi`.
 Return the indices of all new input vertices.
 """
 function add_inputs!(g::AbstractGraph{T}, vertices::AbstractVector{<:T}=vertices(g)) where {T<:Integer}
-    vstart = size(g)+1
+    vstart = nv(g)+1
     vstop = vstart + length(vertices)
     add_vertices!(g, length(vertices))
     for (vi, vinput) in zip(vertices, vstart:vstop)
