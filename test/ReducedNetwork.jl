@@ -1,5 +1,5 @@
 module ReducedNetwork
-using DifferentialEquations, LightGraphs, SimpleWeightedGraphs,
+using DifferentialEquations, LightGraphs, SimpleWeightedGraphs, Statistics,
     Plots, GraphPlot, Compose, Cairo, Fontconfig, Printf # for plotting
 using SpikingNeuralNets.GraphUtils: mesh_graph
 
@@ -49,7 +49,8 @@ end
         Inoise0=zeros(nv(g), 2), tstart=-0.5, tstop=1.0, reltol=1e-15,
         abstol=1e-15, dt=0.1e-3, Jex=1.0, Jin=0.0, Jext=0.2243e-3, JNex=0.1561,
         JNin=-0.0264, JAex=9.9026e-4, JAin=-6.5177e-5, τs=100e-3, τAMPA=2e-3,
-        γ=0.641, Iext=0.35, σnoise=0.007, color1=:red, color2=:blue, kwargs...)
+        γ=0.641, Iext=0.35, σnoise=0.007, display=true, color1=:red, color2=:blue,
+        kwargs...)
 
 Run a reduced 2-variable model of neural populations during a random dot motion task.
 Return a tuple (g, t, Sa, Sb, Inoisea, Inoiseb, Ineta, Inetb, xa, xb, ra, rb).
@@ -76,6 +77,7 @@ Return a tuple (g, t, Sa, Sb, Inoisea, Inoiseb, Ineta, Inetb, xa, xb, ra, rb).
 `γ`: a factor applied to firing rate to update gating variables
 `Iext`: baseline external input current (nV)
 `σnoise`: standard deviation of noise current (nV).
+`display`: if true, draw a plot of gating variables and firing rates over time
 `color1`: the line color of the correct direction in the output plot
 `color2`: the line color of the incorrect direction in the output plot
 Additional keyword arguments are passed to DifferentialEquations.solve.
@@ -84,7 +86,8 @@ function run(g::AbstractGraph; c=fill(0, nv(g)), μ0=fill(30.0, nv(g)), S0=zeros
              Inoise0=zeros(nv(g), 2), tstart=-0.5, tstop=1.0, reltol=1e-15,
              abstol=1e-15, dt=0.1e-3, Jex=1.0, Jin=0.0, Jext=0.2243e-3, JNex=0.1561,
              JNin=-0.0264, JAex=9.9026e-4, JAin=-6.5177e-5, τs=100e-3, τAMPA=2e-3,
-             γ=0.641, Iext=0.35, σnoise=0.007, color1=:red, color2=:blue, kwargs...)
+             γ=0.641, Iext=0.35, σnoise=0.007, display=true, color1=:red, color2=:blue,
+             kwargs...)
     # set up parameters
     Ia = @. Jext*μ0*(1 + c/100.0)
     Ib = @. Jext*μ0*(1 - c/100.0)
@@ -99,28 +102,31 @@ function run(g::AbstractGraph; c=fill(0, nv(g)), μ0=fill(30.0, nv(g)), S0=zeros
     # noise process: τAMPA dI(t)/dt = -I(t) + W(t)*σnoise*√τAMPA
     W = OrnsteinUhlenbeckProcess(τAMPA, 0.0, σnoise*√τAMPA, tstart, Inoise0)
     prob = RODEProblem(ReducedModel, S0, (tstart, tstop), params, noise=W)
-    println(prob)
     sol = solve(prob, reltol=reltol, abstol=abstol, dt=dt, kwargs...)
 
-    # Reconstruct the variables
-    Sa, Sb = sol[:,1,:], sol[:,2,:]
-    Inoisea, Inoiseb = sol.W[:,1,1:length(sol.t)], sol.W[:,2,1:length(sol.t)]
-    Ineta = mapslices((s)->Inetwork(s, g), Jex*Sa + Jin*Sb; dims=1)
-    Inetb = mapslices((s)->Inetwork(s, g), Jex*Sb + Jin*Sa; dims=1)
+    if display
+        # Reconstruct the variables
+        Sa, Sb = sol[:,1,:], sol[:,2,:]
+        Inoisea, Inoiseb = sol.W[:,1,1:length(sol.t)], sol.W[:,2,1:length(sol.t)]
+        Ineta = mapslices((s)->Inetwork(s, g), Jex*Sa + Jin*Sb; dims=1)
+        Inetb = mapslices((s)->Inetwork(s, g), Jex*Sb + Jin*Sa; dims=1)
 
-    # reconstruct the firing rates
-    xa, xb = similar(Sa), similar(Sb)
-    @views for v in vertices(g)
-        xa[v,:] .= x.(Sa[v,:], Sb[v,:], Ineta[v,:], Ia[v], Inoisea[v,:], sol.t, Ref(params))
-        xb[v,:] .= x.(Sb[v,:], Sa[v,:], Inetb[v,:], Ib[v], Inoiseb[v,:], sol.t, Ref(params))
+        # reconstruct the firing rates
+        xa, xb = similar(Sa), similar(Sb)
+        @views for v in vertices(g)
+            xa[v,:] .= x.(Sa[v,:], Sb[v,:], Ineta[v,:], Ia[v], Inoisea[v,:], sol.t, Ref(params))
+            xb[v,:] .= x.(Sb[v,:], Sa[v,:], Inetb[v,:], Ib[v], Inoiseb[v,:], sol.t, Ref(params))
+        end
+        ra = H.(xa, xb, Ref(params))
+        rb = H.(xb, xa, Ref(params))
+
+        Base.display(plot(plot(sol.t, [Sa' Sb'], title="Gating Variables"),
+                     plot(sol.t, [ra' rb'], title="Firing Rates (Hz)"),
+                     leg=false, linecolor=[fill(:red, 1, nv(g)) fill(:blue, 1, nv(g))], layout=(2, 1)))
+        return (g, sol.t, Sa, Sb, Inoisea, Inoiseb, Ineta, Inetb, xa, xb, ra, rb)
+    else
+        return g, sol
     end
-    ra = H.(xa, xb, Ref(params))
-    rb = H.(xb, xa, Ref(params))
-
-    display(plot(plot(sol.t, [Sa' Sb'], title="Gating Variables"),
-                 plot(sol.t, [ra' rb'], title="Firing Rates (Hz)"),
-                 leg=false, linecolor=[fill(:red, 1, nv(g)) fill(:blue, 1, nv(g))], layout=(2, 1)))
-    return (g, sol.t, Sa, Sb, Inoisea, Inoiseb, Ineta, Inetb, xa, xb, ra, rb)
 end
 
 
@@ -192,7 +198,8 @@ Draw a gif of the graph g, where each vertex `v` is colored over time by the
 values `Sa[v, t]` and `Sb[v, t]` on a scale from `color1` to `color2`.
 """
 function RBgif(g::AbstractGraph, Sa::Matrix{<:Real}, Sb::Matrix{<:Real};
-               layout::Function=spring_layout,fps::Integer=100, skip::Integer=1,
+               layout::Function=spring_layout,
+               filename=nothing, fps::Integer=100, skip::Integer=1,
                width::Integer=800, height::Integer=600, kwargs...)
     # use the Animation object manually since frame() doesn't work on Compose objects
     anim = Animation()
@@ -203,8 +210,35 @@ function RBgif(g::AbstractGraph, Sa::Matrix{<:Real}, Sb::Matrix{<:Real};
              RBplot(g, Sa[:,t], Sb[:,t]; locs_x=locs_x, locs_y=locs_y, kwargs...))
         push!(anim.frames, fname)
     end
-    println(anim)
-    return gif(anim, fps=fps)
+    if isnothing(filename)
+        return gif(anim; fps=fps)
+    end
+    return gif(anim, filename; fps=fps)
+end
+
+
+function phaseplot(g::AbstractGraph, inputs; iterations=1, threaded=true,
+                   Jex=-1.0:0.01:1.0, Jin=-1.0:0.01:1.0, kwargs...)
+    diff = Array{Float64}(undef, length(Jex), length(Jin), nv(g))
+
+    function difference(Jex, Jin)
+        g, sol = run(g, inputs; Jex=Jex, Jin=Jin, display=false, kwargs...)
+        return sol[:,1,end] .- sol[:,2,end]
+    end
+
+    if threaded
+        @inbounds @Threads.threads for i in eachindex(Jex)
+            for j in eachindex(Jin)
+                D = [difference(Jex[i], Jin[j]) for itr in 1:iterations]
+                diff[i, j, :] .= mean(D)
+            end
+        end
+    else
+        @inbounds for i in eachindex(Jex), j in eachindex(Jin)
+            diff[i, j, :] .= mean(difference(Jex[i], Jin[j]) for itr in 1:iterations)
+        end
+    end
+    return diff
 end
 
 end

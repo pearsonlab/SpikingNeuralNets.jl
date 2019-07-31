@@ -27,7 +27,7 @@ struct SNN{VT, ST, G} <: AbstractSNN{VT, ST, G}
     V::Vector{Vector{VT}}
 
     """
-        SNN{VT,ST,G}(graph::G, bias::Vector{<:VT}=zeros(nv(graph)), m::Integer=1,
+        SNN{VT,ST,G}(graph::G; bias::Vector{<:VT}=zeros(nv(graph)), m::Integer=1,
                      S::Vector{<:Dict{<:ST, <:ST}}=[Dict{ST, ST}() for _ in vertices(graph)],
                      V::Vector{Vector{<:VT}}=[zeros(VT, nv(graph)) for _ in 1:m])
 
@@ -37,7 +37,7 @@ struct SNN{VT, ST, G} <: AbstractSNN{VT, ST, G}
                           S::Vector{<:Dict{<:ST, <:ST}}=[Dict{ST, ST}() for _ in vertices(graph)],
                           V::Vector{<:Vector{<:VT}}=[zeros(VT, nv(graph)) for _ in 1:m]) where {VT<:Real, ST<:Integer, G<:AbstractGraph{ST}}
         if m < 1
-            error("Configuration memory length (m) must be <= 1.")
+            error("Configuration memory length (m) must be >= 1.")
         end
 
         # Input neurons are those without incoming connections
@@ -54,10 +54,10 @@ end
                VT::Vector{<:Vector{<:VT}}=[zeros(VT, nv(graph)) for _ in 1:m])
 
 Create a new SNN{VT,ST,G} with the given graph and starting configuration.
-Shorthand for the more explicit call SNN{VT,G}(graph, m, S, V)
+Shorthand for the more explicit call SNN{VT,ST,G}(graph, m, S, V)
 """
 function SNN{VT, ST}(graph::G; bias::Vector{VT}=zeros(VT, nv(graph)), m::Integer=1,
-                     S::Vector{Dict{<:ST, <:ST}}=[Dict{ST, ST}() for _ in vertices(graph)],
+                     S::Vector{<:Dict{<:ST, <:ST}}=[Dict{ST, ST}() for _ in vertices(graph)],
                      V::Vector{<:Vector{<:VT}}=[zeros(VT, nv(graph)) for _ in 1:m]) where {VT<:Real, ST<:Integer, G<:AbstractGraph}
     return SNN{VT, ST, G}(graph; bias=bias, m=m, S=S, V=V)
 end

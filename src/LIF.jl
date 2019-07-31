@@ -1,8 +1,8 @@
 module LIFSNN
 using LightGraphs
 using SpikingNeuralNets: voltage, spike, spiketime
-import SpikingNeuralNets: AbstractSNN, potential
-export LIF, memory, channels, haschannel, currentFn, varFn, vars, add_channel!, remove_channel!, I_syn, potential
+import SpikingNeuralNets: AbstractSNN, potential, thresh
+export LIF, memory, channels, haschannel, currentFn, varFn, vars, add_channel!, remove_channel!, I_syn, potential, thresh
 
 """
 A data-type for LIF spiking neural networks.
@@ -108,7 +108,7 @@ function LIF{VT,ST}(graph::G; m::ST=ST(1), dt::VT=VT(1), Vrest::Vector{<:VT}=zer
                     varFns::Dict{String, Function}=Dict{String, Function}(),
                     vars::Dict{<:Tuple{String, <:Integer}, <:Array{<:VT}}=Dict{Tuple{String, Int}, Vector{VT}}(),
                     S::Vector{<:Dict{<:ST, <:ST}}=[Dict{ST, ST}() for _ in vertices(graph)],
-                    V::Vector{<:Vector{<:VT}}=[rand(nv(graph)).*(Vθ.-Vrest).+Vrest]) where {VT<:Real, ST<:Integer, G<:AbstractGraph{ST}}
+                    V::Vector{<:Vector{<:VT}}=[rand(nv(graph)).*(Vreset.-Vrest).+Vrest]) where {VT<:Real, ST<:Integer, G<:AbstractGraph{ST}}
     return LIF{VT,ST,G}(graph; S=S, V=V, m=m, dt=dt, Vrest=Vrest, Vθ=Vθ, Vreset=Vreset,
                         τ=τ, R=R, τref=τref, currentFns=currentFns, varFns=varFns, vars=vars)
 end
@@ -118,8 +118,8 @@ end
 
 Return the size of the network `lif`'s voltage memory.
 """
-function memory(snn::LIF{VT, ST})::ST where {VT<:Real, ST<:Integer}
-    return snn.m
+function memory(lif::LIF{VT, ST})::ST where {VT<:Real, ST<:Integer}
+    return lif.m
 end
 
 """
@@ -216,7 +216,7 @@ end
 """
     Isyn!(lif::LIF, n::Integer)::Real
 
-Calculate the the total synaptic input to neuron `n` in the network `snn`,
+Calculate the the total synaptic input to neuron `n` in the network `lif`,
 calculating and updating the (gating) variables `lif.vars[channel, n]` for
 each `channel` of the neuron.
 """
@@ -252,4 +252,10 @@ function potential(lif::LIF, n::Integer)::Real
     end
 end
 
+"""
+    thresh(lif::LIF, n::Integer, x::Real)::Real
+
+The threshold/step transfer function.
+"""
+thresh(lif::LIF, n::Integer, x::Real)::Real = thresh(x, lif.Vθ[n])
 end

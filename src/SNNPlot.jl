@@ -106,7 +106,7 @@ each axis corresponds to the rate of a population, and the line is a traversal
 through this rate space over time.
 """
 function rArBgif(SA::AbstractArray{<:Real}, SB::AbstractArray{<:Real};
-                 window=0, dt=1, timestep=1, average=true, tohz=1/(timestep*dt), fps=1, tail=0, skip=1, kwargs...)
+                 window=0, dt=1, timestep=1, average=true, tohz=1/(timestep*dt), fps=1, tail=0, skip=1, filename=nothing, kwargs...)
     rA, _ = smooth(SA; window=window, dt=dt, timestep=timestep, average=average, tohz=tohz)
     rB, _ = smooth(SB; window=window, dt=dt, timestep=timestep, average=average, tohz=tohz)
 
@@ -117,7 +117,10 @@ function rArBgif(SA::AbstractArray{<:Real}, SB::AbstractArray{<:Real};
             plot!(rA[range,:], rB[range,:]; leg=false, kwargs...)
         end
     end every skip
-    return gif(anim, fps=fps)
+    if isnothing(filename)
+        return gif(anim; fps=fps)
+    end
+    return gif(anim, filename; fps=fps)
 end
 
 function snnplot(snn; kwargs...)
