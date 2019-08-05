@@ -1,6 +1,6 @@
 module RecurrentCorticalNetwork
 using LightGraphs, SimpleWeightedGraphs, Distributions, Plots
-using SpikingNeuralNets, SpikingNeuralNets.LIFSNN, SpikingNeuralNets.GraphUtils, SpikingNeuralNets.SNNPlot
+using SpikingNeuralNets, SpikingNeuralNets.LIFs, SpikingNeuralNets.GraphUtils, SpikingNeuralNets.SNNPlot, SpikingNeuralNets.Inputs
 
 # Set up the network
 const N = 100
@@ -63,7 +63,7 @@ const σ = 4
 # Define Leaky Integrate-and-Fire Parameters
 const dt = 0.02e-3 # Timestep (0.02ms)
 const Vrest = -0.07 # Resting potential (-70 mV)
-const Vθ = -0.05 # Firing lifold (-50 mV)
+const Vθ = -0.05 # Firing threshold (-50 mV)
 const Vreset = -0.055 # Reset potential (-55 mv)
 const Ve = 0.0      # excitatory reversal potential (0 mV)
 const Vi = -70e-3   # inhibitory reversal potential (-70 mV)
@@ -78,10 +78,10 @@ gL(pyramidal::Bool)::Real = pyramidal ? 25e-9 : 20e-9    # membrane leak conduct
 τ(pyramidal::Bool)::Real = Cm(pyramidal) / gL(pyramidal)
 
 # synaptic conductances (nS)
-gextAMPA(pyramidal::Bool)::Real = pyramidal ? 2.1e-9 : 1.62e-9 # 2.1e-9 : 1.62e-9
+gextAMPA(pyramidal::Bool)::Real = pyramidal ? 1.5e-9 : 1.25e-9 # 2.1e-9 : 1.62e-9
 grecAMPA(pyramidal::Bool)::Real = pyramidal ? 0.05e-9 : 0.04e-9 # 0.05e-9 : 0.04e-9
 gNMDA(pyramidal::Bool)::Real = pyramidal ? 0.165e-9 : 0.13e-9 # 0.165e-9 : 0.13e-9
-gGABA(pyramidal::Bool)::Real = pyramidal ? 5.5e-9 : 4.0e-9 # 1.3e-9 : 1.0e-9
+gGABA(pyramidal::Bool)::Real = pyramidal ? 4.5e-9 : 4.0e-9 # 1.3e-9 : 1.0e-9
 # synaptic decay times
 const τAMPA = 2e-3/dt
 const α = 500.0*dt
@@ -207,84 +207,13 @@ function synapsetest(;pyramidal=true, channel="AMPA", x=x=0:500, iterations=1000
                 layout=(2,1))
 end
 
-
-
-"""
-    geninput(c::Real, length::Integer, extStart=1, extStop=0)::Matrix{Int}
-
-Generate an `N`x`length` `Matrix` of background inputs given by `Poission(Vext)`,
-and additional external inputs to `aneurons` and `bneurons` given by
-`Poisson(Normal(μ0 + ρa*c))` and `Poisson(Normal(μ0 - ρb*c))` respectively.
-"""
-function geninput(;c::Real, length::Integer, extStart=1, extStop=length)::Matrix{Int}
-    μa = μ0 + ρa * c
-    μb = μ0 - ρb * c
-
-    # initialize with background noise at rate Vext
-    I = rand(Poisson(Vext*dt), N, length)
-
-    # add external inputs for iterations
-    window = floor(Int, 50e-3 / dt) # resample every 50ms
-    for t in extStart:window:extStop
-        tstop = min(t+window, extStop)
-        cols = tstop - t + 1
-
-        sa = rand(Normal(μa, σ))  # input rates (Hz)
-        sb = rand(Normal(μb, σ))
-
-        # draw spike counts from Poisson distributions
-        I[1:nA, t:tstop] += rand(Poisson(dt*sa), nA, cols)
-        I[(nA+1):(nA+nB), t:tstop] += rand(Poisson(max(dt*sb, 0.0)), nB, cols)
-    end
-    return I
-end
-
-mutable struct SNNInput
-    c::Float64
-    resample::Int
-    count::Int
-    extStart::Int
-    extStop::Int
-end
-
-function SNNInput(;c=100.0, resample=floor(Int, 50e-3/dt), count=100, extStart=1, extStop=count)
-    return SNNInput(c, resample, count, extStart, extStop)
-end
-
-Base.length(iter::SNNInput) = iter.count
-Base.size(iter::SNNInput) = (N, iter.count)
-μa(iter::SNNInput) = μ0 + ρa * iter.c
-μb(iter::SNNInput) = μ0 - ρb * iter.c
-
-function Base.iterate(iter::SNNInput)
-    return Base.iterate(iter, (1, rand(Normal(μa(iter), σ)), rand(Normal(μb(iter), σ))))
-end
-
-function Base.iterate(iter::SNNInput, state)
-    i, sa, sb = state
-    if i > iter.count
-        return nothing
-    end
-
-    # reset the rates for A and B inputs
-    if i < iter.extStart || i > iter.extStop
-        sa = 0.0
-        sb = 0.0
-    elseif i % iter.resample == 0
-        sa = rand(Normal(μa(iter), σ))
-        sb = rand(Normal(μb(iter), σ))
-    end
-
-    I = rand(Poisson(Vext*dt), N)
-    I[1:nA] .+= rand(Poisson(dt*sa), nA)
-    I[(nA+1):(nA+nB)] .+= rand(Poisson(max(dt*sb, 0.0)), nB)
-    return I, (i+1, sa, sb)
-end
-
 function run(;c::Real=0.0, iterations::Integer=10, window::Integer=100, extStart=1, extStop=iterations)
     GC.gc()
-    #I = geninput(;c=c, length=iterations, extStart=extStart, extStop=extStop)
-    I = SNNInput(;c=c, count=iterations, extStart=extStart, extStop=extStop)
+    μa = μ0 + ρa*c
+    μb = μ0 - ρb*c
+    ext = ConstantPoissonInput(Vext*dt, N, iterations)
+    stim = VariablePoissonInput([fill(μa*dt, nA); fill(μb*dt, nB); zeros(nNS+nI)], [fill(σ*dt, nA+nB); zeros(nNS+nI)], iterations; resample=floor(Int, 50e-3/dt), start=extStart, stop=extStop)
+    I = SummedInput(ext, stim)
 
     # create the LIF and add all of the channel types
     lif = LIF{Float64, Int}(graph; m=1, dt=dt, Vrest=fill(Vrest, nv(graph)),

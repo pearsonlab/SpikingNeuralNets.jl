@@ -61,10 +61,14 @@ end
 
 Construct a complex graph from a metagraph, a graph where each vertex vi represents a set of layers[vi] vertices in the complex graph which have identical edges. If selfloops is true, a self-loop in the metagraph will produce self-loops in all of the vertices in the resulting set. If completeloops is true, a self-loop in the metagraph will produce full connectivity between all vertices in the resulting set.
 """
-function ComplexGraph(metagraph::G, layers::AbstractVector{<:Integer}; selfloops=true, completeloops=true) where {G <: AbstractGraph}
+function ComplexGraph(metagraph::G, layers::AbstractVector{<:Integer}, probabilityGraph::WG=SimpleWeightedDiGraph(SimpleDiGraph(weights(metagraph)), 1.0); selfloops=true, completeloops=true) where {G <: AbstractGraph, WG <: AbstractSimpleWeightedGraph{T,U} where {T, U}}
     nlayers = length(layers)
     if nlayers != nv(metagraph)
         error("$layers must have the same length as the number of vertices in $metagraph.")
+    elseif nv(metagraph) != nv(probabilityGraph)
+        error("$metagraph must have the same number of vertices as $probabilityGraph.")
+    elseif !iszero(ne(symmetric_difference(metagraph, probabilityGraph)))
+        error("$metagraph must have the same enges as $probabilityGraph.")
     end
 
     # construct ranges for each layer
@@ -82,7 +86,8 @@ function ComplexGraph(metagraph::G, layers::AbstractVector{<:Integer}; selfloops
         for j in outneighbors(metagraph, i)
             for u in layerrange[i]
                 for v in layerrange[j]
-                    if i != j || (u == v && selfloops) || (u != v && completeloops)
+                    # fill in the edge with probability weights(probabilityGraph)[i, j]
+                    if (i != j || (u == v && selfloops) || (u != v && completeloops)) && rand() <= weights(probabilityGraph)[i, j]
                         adjmat[u,v] = true
                     end
                 end
@@ -94,12 +99,7 @@ function ComplexGraph(metagraph::G, layers::AbstractVector{<:Integer}; selfloops
     return G(adjmat)
 end
 
-"""
-    ComplexGraph(metagraph, layers)
-
-Construct a complex graph from a metagraph, a graph where each vertex vi represents a set of layers[vi] vertices in the complex graph which have identical edges. If selfloops is true, a self-loop in the metagraph will produce self-loops in all of the vertices in the resulting set. If completeloops is true, a self-loop in the metagraph will produce full connectivity between all vertices in the resulting set.
-"""
-function ComplexGraph(metagraph::G, layers::AbstractVector{<:Integer}; selfloops=true, completeloops=true) where G<:AbstractSimpleWeightedGraph{T, U} where {T,U}
+function ComplexGraph(metagraph::G, layers::AbstractVector{<:Integer}, probabilityGraph::G=SimpleWeightedDiGraph(SimpleDiGraph(weights(metagraph)), 1.0); selfloops=true, completeloops=true) where G<:AbstractSimpleWeightedGraph{T, U} where {T,U}
     nlayers = length(layers)
     if nlayers != nv(metagraph)
         error("$layers must have the same length as the number of vertices in $metagraph.")
@@ -121,7 +121,7 @@ function ComplexGraph(metagraph::G, layers::AbstractVector{<:Integer}; selfloops
         for j in outneighbors(metagraph, i)
             for u in layerrange[i]
                 for v in layerrange[j]
-                    if i != j || (u == v && selfloops) || (u != v && completeloops)
+                    if (i != j || (u == v && selfloops) || (u != v && completeloops)) && rand() <= weights(probabilityGraph)[i, j]
                         adjmat[u,v] = w[i, j]
                     end
                 end
@@ -130,6 +130,25 @@ function ComplexGraph(metagraph::G, layers::AbstractVector{<:Integer}; selfloops
     end
 
     return G(adjmat)
+end
+
+"""
+    ComplexGraph(Ns::Vector{<:Integer}, edges::Vararg{NTuple{4, Integer}}, NE}; kwargs...) where NE
+
+Construct a graph from a metagraph with `length(Ns)` nodes.
+`edges` is a variable number of tuples `(u, v, w, p)`, where the edge on the
+metagraph is from vertex `u` to vertex `v` with weight `w` and probability `p`.
+"""
+function ComplexGraph(Ns::Vector{<:Integer}, edges::Vararg{Tuple{<:Integer, <:Integer, <:Real, <:Real}}; kwargs...)
+    # Construct a weighted meta-graph with length(N) populations
+    metagraph = SimpleWeightedDiGraph(length(Ns))
+    probabilityGraph = SimpleWeightedDiGraph(length(Ns))
+
+    for (u, v, w, p) in edges
+        add_edge!(metagraph, u, v, w)
+        add_edge!(probabilityGraph, u, v, p)
+    end
+    return ComplexGraph(metagraph, Ns, probabilityGraph; kwargs...)
 end
 
 """

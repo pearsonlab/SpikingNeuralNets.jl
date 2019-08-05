@@ -1,5 +1,5 @@
 module WTA
-using SpikingNeuralNets, SpikingNeuralNets.SimpleSNN, SpikingNeuralNets.GraphUtils, SpikingNeuralNets.SNNPlot
+using SpikingNeuralNets, SpikingNeuralNets.SNNs, SpikingNeuralNets.GraphUtils, SpikingNeuralNets.SNNPlot
 using LightGraphs, SimpleWeightedGraphs
 
 function wta_layout(g::AbstractGraph)

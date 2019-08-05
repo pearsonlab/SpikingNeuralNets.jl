@@ -480,9 +480,9 @@ function step!(snn::AbstractSNN{VT,ST,G}, iterations::Integer, stateFns::Vararg{
     return step!(snn, constantly(iterations, input), stateFns...; pot=pot, transfer=transfer, f=f, threaded=threaded)
 end
 
-include("SimpleSNN.jl")
-include("LIF.jl")
-include("GraphUtils.jl")
-include("SNNPlot.jl")
-
+include("SNNs.jl")
+include("LIFs.jl")
+include("utils/GraphUtils.jl")
+include("utils/SNNPlot.jl")
+include("inputs/Inputs.jl")
 end

@@ -1,4 +1,4 @@
-module LIFSNN
+module LIFs
 using LightGraphs
 using SpikingNeuralNets: voltage, spike, spiketime
 import SpikingNeuralNets: AbstractSNN, potential, thresh
@@ -226,7 +226,7 @@ function Isyn!(lif::LIF, n::Integer)::Real
     @inbounds for channel in channels(lif)
         if haskey(lif.vars, (channel, n))
             # calculate the gating variables
-            lif.vars[channel, n] += lif.varFns[channel](lif, n, lif.vars[channel, n])
+            lif.vars[channel, n] .+= lif.varFns[channel](lif, n, lif.vars[channel, n])
             # calculate the synaptic current
             I += lif.currentFns[channel](lif, n, lif.vars[channel, n])
         end

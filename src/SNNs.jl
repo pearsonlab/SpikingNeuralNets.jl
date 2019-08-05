@@ -1,4 +1,4 @@
-module SimpleSNN
+module SNNs
 import SpikingNeuralNets: AbstractSNN, memory, bias
 using LightGraphs
 

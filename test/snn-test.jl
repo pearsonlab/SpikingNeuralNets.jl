@@ -1,6 +1,6 @@
 module SNNTest
 using LightGraphs
-using SpikingNeuralNets, SpikingNeuralNets.LIFSNN, SpikingNeuralNets.SNNPlot
+using SpikingNeuralNets, SpikingNeuralNets.LIFs, SpikingNeuralNets.SNNPlot
 
 const iterations = 1000
 const dt = 1.0 # timestep
